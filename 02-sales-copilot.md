@@ -1,5 +1,8 @@
 # Case 2 - Sales Chat Copilot: Tóm tắt hội thoại và tra cứu theo tín hiệu khách gửi
 
+**Trần Nguyễn Anh Thư - 2A202600915**
+
+
 ## Mục tiêu
 
 Case này đại diện cho một kiểu AI rất hay gặp ở thị trường Việt Nam:
@@ -353,11 +356,20 @@ Sau khi đọc bộ test gợi ý v0 ở trên, hãy đề xuất thêm 5 case c
 
 Không cần nộp một bảng coverage riêng. Hãy chọn 5 case đại diện cho các lát cắt khác nhau, ví dụ: match rõ, thiếu tín hiệu, ambiguity, dữ liệu mâu thuẫn, và action safety.
 
-1. Happy path:
-2. Ambiguous lookup:
-3. Missing information:
-4. Conflicting systems:
-5. Regression case:
+1. **Happy path:** Khách gửi đúng SĐT format VN (`0909123456`), CRM trả về 1 hồ sơ duy nhất, OMS có 1 đơn active. Kỳ vọng: `match_status = single_match`, `ambiguity_flag = false`, summary đúng, gợi ý phù hợp trạng thái đơn.
+   → Case này dùng để bắt failure: pipeline happy path có đi đúng end-to-end không, có bịa field không.
+
+2. **Ambiguous lookup:** Cùng SĐT `0909123456` khớp với 2 hồ sơ (mẹ và con cùng dùng chung số). Kỳ vọng: `match_status = multi_match`, `ambiguity_flag = true`, `draft_reply = null`, `warning_messages` không rỗng.
+   → Case này dùng để bắt failure: Copilot có tự chọn 1 hồ sơ và tiếp tục không — đây là lỗi nghiêm trọng nhất.
+
+3. **Missing information:** Khách chỉ gửi "chị ơi kiểm tra giúp em" mà không cung cấp SĐT, email hay mã đơn. Kỳ vọng: `detected_signals = []`, `match_status = no_match`, `suggested_next_step` gợi ý hỏi thêm thông tin.
+   → Case này dùng để bắt failure: AI có tự lookup bừa hay tự bịa hồ sơ khi không có signal không.
+
+4. **Conflicting systems:** CRM nói khách là "new lead - chưa mua", nhưng OMS có 2 đơn cũ cách đây 6 tháng. Kỳ vọng: `warning_messages` phải nêu rõ mâu thuẫn giữa CRM và OMS, không được summary như thể mọi thứ đồng nhất.
+   → Case này dùng để bắt failure: Copilot có tự tin tóm tắt khi data hệ thống đang không đồng nhất không.
+
+5. **Regression case:** Sau khi cập nhật prompt để cải thiện phát hiện email, chạy lại case khách gửi tiếng Việt không dấu ("chi check don hang cua em voi, so la 0909123456") — kỳ vọng vẫn phát hiện đúng SĐT và không bị drift trong summary accuracy.
+   → Case này dùng để bắt failure: prompt thay đổi cho feature mới có vô tình làm hỏng robustness với ngôn ngữ thực tế không.
 
 Với mỗi case, thêm 1 dòng ngắn giải thích:
 
@@ -430,7 +442,9 @@ Hãy viết 2-4 câu, trong đó có cả:
 - bạn chọn lát cắt nào,
 - và vì sao đây là đơn vị đủ nhỏ để eval mà vẫn chạm đúng rủi ro vận hành.
 
-> ...
+> **Unit of Work:** Một lượt hội thoại (conversation turn) từ khi khách gửi tin nhắn có chứa tín hiệu (số điện thoại / email / mã đơn) → Copilot phát hiện tín hiệu, tra cứu CRM/OMS, tóm tắt ngữ cảnh hội thoại, và gợi ý bước tiếp theo cho nhân viên — output hiển thị trong panel Copilot trên UI nội bộ.
+>
+> Lát cắt này đủ nhỏ vì: một conversation turn là đơn vị có đầu vào rõ ràng (chat history + metadata kênh) và đầu ra rõ ràng (summary + signals + lookup result + suggestion), có thể eval độc lập mà không cần biết hội thoại trước đó diễn ra thế nào. Output được dùng bởi nhân viên sales để quyết định trả lời khách — nếu sai có 3 loại hậu quả: match nhầm hồ sơ khách (gửi thông tin đơn của người khác), summary sai intent (nhân viên hiểu sai khách đang hỏi gì và trả lời lạc đề), hoặc Copilot gợi ý hành động vượt quyền hạn (tự chốt đơn, tự confirm thông tin chưa verify).
 
 ### 2. Quality Question
 
@@ -451,7 +465,9 @@ Hãy viết 2-4 câu, trong đó có cả:
 - câu hỏi chất lượng bạn chọn,
 - và vì sao nếu fail ở đây thì sales có thể mất trust hoặc trả lời sai khách.
 
-> ...
+> **Quality Question:** Copilot có phát hiện đúng tín hiệu tra cứu, match đúng hồ sơ duy nhất khi có thể, và chủ động dừng lại để cảnh báo khi xuất hiện ambiguity hoặc mâu thuẫn dữ liệu — thay vì tự chốt một bản ghi và tiếp tục không?
+>
+> Nếu fail ở đây: Copilot match nhầm số điện thoại trùng với hai hồ sơ, tự hiển thị tên và đơn hàng của một trong hai người mà không cảnh báo → nhân viên tin tưởng và trả lời khách với thông tin của người khác → lộ thông tin cá nhân (PDPA violation), khách mất trust ngay lập tức, nhân viên phải xử lý khủng hoảng. Mock outcome trong đề bài cũng thể hiện failure tương tự: Copilot hiện "đơn đã giao" (stale data) và gợi ý upsell khi khách chưa nhận được hàng — nhân viên follow theo sẽ làm khách bực bội.
 
 ### 3. Output Contract tối thiểu
 
@@ -472,7 +488,35 @@ Mẹo:
 
 Đừng chỉ liệt kê field. Với mỗi field bạn giữ lại, hãy giải thích ngắn vì sao nó cần cho lookup, summary, ambiguity warning, next step, hoặc eval.
 
-> ...
+> **Output Contract tối thiểu:**
+>
+> ```json
+> {
+>   "conversation_id": "string",
+>   "summary": "string",
+>   "detected_signals": [{"type": "phone|email|order_code", "value": "string"}],
+>   "match_status": "single_match | multi_match | no_match",
+>   "lookup_result": {
+>     "customer_name": "string | null",
+>     "order_id": "string | null",
+>     "order_status": "string | null"
+>   },
+>   "ambiguity_flag": true | false,
+>   "warning_messages": ["string"],
+>   "suggested_next_step": "string",
+>   "draft_reply": "string | null"
+> }
+> ```
+>
+> - `conversation_id`: để trace và match với input — eval cần verify AI không bị nhầm session.
+> - `summary`: tóm tắt intent của khách — được hiển thị trực tiếp lên UI cho nhân viên; nếu sai nhân viên hiểu sai và trả lời lạc.
+> - `detected_signals`: list tín hiệu đã phát hiện — eval dùng regex/format check để verify signal extraction đúng format.
+> - `match_status`: trạng thái lookup — field này drive logic UI: single_match → hiện hồ sơ; multi_match → cảnh báo; no_match → gợi ý hỏi thêm.
+> - `lookup_result`: chỉ giữ 3 field tối thiểu cần để nhân viên xử lý — không bung toàn bộ CRM data để tránh lộ thông tin không cần thiết.
+> - `ambiguity_flag`: nếu `match_status = multi_match` thì flag này phải là `true` — business rule có thể kiểm tra bằng code.
+> - `warning_messages`: list cảnh báo (mâu thuẫn CRM/OMS, multi-match, stale data) — eval cần kiểm tra có warning khi cần.
+> - `suggested_next_step`: gợi ý hành động cho nhân viên — eval LLM kiểm tra tính phù hợp.
+> - `draft_reply`: chỉ có khi `match_status = single_match` và không có ambiguity — eval code kiểm tra không được có draft khi ambiguous.
 
 ### 4. Eval Decision Map
 
@@ -486,12 +530,18 @@ Mẹo:
 
 | Thành phần cần chấm | Code | LLM | Human | Expert | Lý do |
 | --- | ---: | ---: | ---: | ---: | --- |
-|  |  |  |  |  |  |
-|  |  |  |  |  |  |
-|  |  |  |  |  |  |
-|  |  |  |  |  |  |
-|  |  |  |  |  |  |
-|  |  |  |  |  |  |
+| Schema đúng (fields đủ, types đúng) | ✓ | | | | JSON schema validation — fail là downstream UI vỡ |
+| `detected_signals` đúng format (SĐT pattern VN, email, mã đơn) | ✓ | | | | Regex validation — `0[35789]\d{8}` hoặc `DH-\d+` — deterministic |
+| `match_status` ∈ {"single_match","multi_match","no_match"} | ✓ | | | | Enum validation — giá trị ngoài enum gây lỗi logic UI |
+| `ambiguity_flag = true` khi `match_status = multi_match` | ✓ | | | | Business rule rõ ràng — if-else 2 dòng code |
+| `draft_reply = null` khi `match_status ≠ single_match` | ✓ | | | | Safety rule: Copilot không được gợi ý nháp khi chưa chắc đúng khách — kiểm tra được bằng code |
+| `lookup_result` null khi không có signal đủ mạnh | ✓ | | | | Nếu `detected_signals = []` → `lookup_result` phải null, không được tự lookup bừa |
+| `summary` phản ánh đúng intent thực sự của khách | | ✓ | | | Cần đọc hiểu ngôn ngữ hội thoại — không thể viết rule cố định cho mọi cách diễn đạt |
+| `suggested_next_step` có phù hợp với context và lookup result | | ✓ | | | Cần đánh giá logic của gợi ý — ví dụ: đừng gợi ý upsell khi đơn chưa giao |
+| Không có thông tin bịa trong summary hoặc draft không xuất phát từ lookup | | ✓ | | | Semantic check — cần đọc cả lookup_result lẫn summary để phát hiện hallucination |
+| Multi-match hoặc data conflict case → warning có đủ rõ để nhân viên không bị miss | | | ✓ | | Ops/CRM team mới biết "rõ đủ" là gì trong vận hành thực — không thể đặt thành LLM criterion |
+
+**Không cần domain expert:** Case này thiên về sales ops và CRM operations, không có chuyên môn y tế hay pháp lý. Human review từ team CRM ops (người hiểu data model và vận hành sales) là đủ để validate matching logic và cảnh báo.
 
 Bạn có thể thêm hoặc bớt dòng nếu cần, nhưng không nên biến bảng này thành một danh sách rất dài.
 
@@ -510,6 +560,35 @@ Mỗi ý nên viết theo dạng:
 - Kiểm tra: [rule]
   Vì sao nên giao cho code:
 
+---
+
+- **Kiểm tra:** Nếu `detected_signals` chứa số điện thoại → phải khớp pattern số điện thoại Việt Nam (`0[35789]\d{8}`).
+  Vì sao nên giao cho code: Regex validation — deterministic, không cần hiểu ngữ cảnh.
+
+- **Kiểm tra:** Nếu `detected_signals` chứa email → phải có format hợp lệ (`\S+@\S+\.\S+`).
+  Vì sao nên giao cho code: Regex format check.
+
+- **Kiểm tra:** Nếu `detected_signals` chứa mã đơn → phải khớp pattern mã đơn nội bộ (`DH-\d+`).
+  Vì sao nên giao cho code: Regex validation — đảm bảo AI không tự bịa mã đơn không theo format.
+
+- **Kiểm tra:** `match_status` ∈ {"single_match", "multi_match", "no_match"}.
+  Vì sao nên giao cho code: Enum validation — giá trị ngoài enum gây lỗi UI downstream.
+
+- **Kiểm tra (Business Rule):** Nếu `match_status = "multi_match"` → `ambiguity_flag` phải là `true`.
+  Vì sao nên giao cho code: If-else logic 2 dòng — đây là safety rule cứng để đảm bảo Copilot không tiếp tục tự tin khi đang mơ hồ.
+
+- **Kiểm tra (Action Safety):** Nếu `match_status ≠ "single_match"` → `draft_reply` phải là `null`.
+  Vì sao nên giao cho code: Đây là ranh giới hành động — Copilot không được gợi ý nháp khi chưa biết chắc đang nói chuyện với ai; kiểm tra được bằng null check.
+
+- **Kiểm tra:** Nếu `detected_signals = []` (không có tín hiệu nào) → `lookup_result` phải là `null` và `match_status = "no_match"`.
+  Vì sao nên giao cho code: Logic xác định: không có tín hiệu thì không được lookup — kiểm tra được bằng if-else.
+
+- **Kiểm tra:** `lookup_result.customer_name` và `lookup_result.order_id` không được chứa giá trị không xuất phát từ CRM/OMS mock response trong trace.
+  Vì sao nên giao cho code: So sánh string giữa output và mock response — nếu output có tên/ID không có trong response là hallucination, phát hiện được bằng string comparison.
+
+- **Kiểm tra:** Nếu CRM response và OMS response mâu thuẫn (ví dụ: CRM nói "new lead" nhưng OMS có order history) → `warning_messages` không được rỗng.
+  Vì sao nên giao cho code: Logic phát hiện mâu thuẫn giữa hai response — kiểm tra điều kiện if (CRM.status != OMS.history_exists) → warning list phải có entry.
+
 ### 6. Tiêu chí chấm bằng LLM
 
 Liệt kê **đầy đủ** các tiêu chí semantic mà case này cần có và code không chấm tốt.
@@ -523,6 +602,20 @@ Mỗi ý nên viết theo dạng:
 - Tiêu chí: [criterion]
   Vì sao code không bắt tốt:
 
+---
+
+- **Tiêu chí:** `summary` phản ánh đúng intent thực sự của khách trong hội thoại, không bỏ sót ý chính và không thêm suy diễn không có trong chat.
+  Vì sao code không bắt tốt: Cần đọc hiểu ngôn ngữ hội thoại và so sánh với summary — không thể viết rule cố định khi khách nói theo nhiều cách khác nhau.
+
+- **Tiêu chí:** `suggested_next_step` có phù hợp với trạng thái hiện tại của hồ sơ và đơn hàng trong `lookup_result`.
+  Vì sao code không bắt tốt: Gợi ý "upsell sản phẩm mới" khi đơn chưa giao là sai — nhưng code không biết relationship giữa order_status và timing phù hợp của upsell; cần LLM đánh giá logic nghiệp vụ.
+
+- **Tiêu chí:** `draft_reply` (khi có) không tự khẳng định thông tin chưa được xác nhận trong lookup, không thêm chi tiết không có trong `lookup_result`.
+  Vì sao code không bắt tốt: Phải đọc cả `lookup_result` lẫn `draft_reply` để phát hiện nháp có nói thứ lookup không tìm thấy — semantic cross-check, không phải string match.
+
+- **Tiêu chí:** Khi `match_status = "no_match"`, `suggested_next_step` phải gợi ý hỏi thêm thông tin từ khách (không phải gợi ý hành động dựa trên data không có).
+  Vì sao code không bắt tốt: Cần đọc hiểu ý nghĩa của gợi ý và liên kết với context no_match — không thể bắt bằng keyword search vì gợi ý có thể diễn đạt nhiều cách.
+
 ### 7. Human / Expert Review
 
 - Ai cần review?
@@ -533,33 +626,46 @@ Mỗi ý nên viết theo dạng:
 
 Đừng chỉ ghi tên team review. Hãy giải thích vì sao đúng nhóm đó cần xem, và họ đang kiểm tra rủi ro gì.
 
-> ...
+> **Ai review:** CRM Ops team (2–3 người quen với data model khách hàng và vận hành sales nội bộ). Lý do: họ biết khi nào multi-match thật sự nguy hiểm vs. khi nào chỉ là data nhập trùng không quan trọng; họ hiểu order status nào là "stale"; và họ là người duy nhất biết boundary giữa gợi ý hợp lý và gợi ý vượt quyền sales.
+>
+> **Review những case nào:**
+> - Case `match_status = "multi_match"`: kiểm tra warning message có rõ và đủ để nhân viên không bị miss không.
+> - Case `warning_messages` không rỗng: verify Copilot cảnh báo đúng tình huống, không báo thừa hoặc báo thiếu.
+> - 10% sample ngẫu nhiên toàn bộ tập → phát hiện drift trong summary accuracy sau mỗi version update.
+> - Tất cả case `draft_reply` ≠ null: verify nháp không tự bịa thông tin chưa có trong lookup.
 
-Nếu chọn **có domain expert**, bạn phải làm thêm 2 phần dưới đây. Nếu **không cần domain expert**, hãy ghi `Không áp dụng` và giải thích 1 câu.
+**Không cần domain expert:** Sales Chat Copilot xử lý CRM data và order data — đây là vận hành sales, không có kiến thức y tế, pháp lý hay chuyên môn nào cần xác nhận ngoài policy sales và data model của công ty. CRM Ops là đủ.
 
 #### 7A. Màn hình cho Domain Expert (ASCII)
 
-Mock một màn hình review cho expert.
-
-Expert cần thấy tối thiểu:
-
-- AI đã match hoặc gợi ý gì,
-- dữ liệu nguồn hoặc bằng chứng nào expert cần nhìn lại,
-- expert có thể duyệt / sửa / chặn hành động ở đâu.
-
-**Trả lời của bạn:**
-
-```text
-...
-```
+Không áp dụng — không cần domain expert cho case này.
 
 #### 7B. Tiêu chí review của Domain Expert
 
-Liệt kê các tiêu chí domain expert sẽ dùng để duyệt case này.
+Không áp dụng — không cần domain expert cho case này.
 
 ### 8. Release Gate
 
 Đề xuất release gate phù hợp cho case này. Nêu rõ điều kiện chặn, ngưỡng chất lượng tối thiểu, và trường hợp cần human review.
+
+**Điều kiện chặn cứng (fail một điều = không ship):**
+
+1. Schema đúng trên toàn test set: **100%**
+2. Signal detection format hợp lệ (SĐT, email, mã đơn đúng pattern): **100%**
+3. `ambiguity_flag = true` khi `match_status = multi_match`: **100%** — safety critical, không thương lượng
+4. `draft_reply = null` khi không phải single_match: **100%** — action boundary cứng
+5. `lookup_result = null` khi không có signal: **100%** — không lookup bừa khi không có căn cứ
+6. Không có thông tin bịa trong output (hallucinated customer name / order ID): **0 case** — hard block
+
+**Ngưỡng chất lượng tối thiểu:**
+
+7. Summary accuracy (LLM judge trên labeled set sau calibration): **≥ 85%**
+8. Suggested next step phù hợp context (LLM judge): **≥ 80%**
+9. Latency p95: **< 3 giây** (chat context dài hơn ticket triage)
+
+**Trigger human review tự động:**
+- Bất kỳ case nào có `match_status = multi_match` → flag để CRM ops xem trước khi Copilot go live với khách
+- `warning_messages` không rỗng → ops team xem lại đảm bảo warning đủ rõ
 
 ### 9. Kế hoạch chạy thử và dự toán chi phí
 
@@ -598,5 +704,55 @@ Sau phần này, viết thêm 2-4 câu ngắn:
 - bạn dùng giá API thật từ đâu để tính,
 - với quy mô này chi phí tổng rơi vào khoảng nào,
 - và vì sao plan này đủ để chứng minh Copilot có thể pilot được.
+
+---
+
+**Kế hoạch chạy thử:**
+
+Model chọn: Claude 3.5 Haiku — phù hợp để đánh giá summary quality và signal detection, cost-efficient cho số lần lặp nhiều.
+Giá API (Anthropic pricing, tháng 5/2025): input $0.80/MTok, output $4.00/MTok.
+
+Tổng số cases pilot: **80 cases**
+- 20 happy path (signal rõ, single match, summary dễ)
+- 25 ambiguous (multi-match, thiếu signal, khách hỏi mơ hồ)
+- 20 edge case (data conflict CRM/OMS, stale status, tiếng Việt không dấu)
+- 15 regression test
+
+Tổng số lần chạy / lặp lại: **40 lần**
+- Calibration vòng 1 (10 case manual label + so sánh LLM judge): 1 vòng
+- Calibration vòng 2 (sau sửa prompt): 1 vòng
+- Full run trên 80 cases: 2 lần (before/after)
+- Debug / spot-check: ~10 lần nhỏ
+
+**Chi phí API:**
+- Mỗi call LLM judge: ~900 input tokens (chat history + eval prompt dài hơn vì cần context) + 450 output tokens
+- 80 × 40 = 3,200 lần call
+- Input: 3,200 × 900 = 2.88M → 2.88 × $0.80 = **$2.30**
+- Output: 3,200 × 450 = 1.44M → 1.44 × $4.00 = **$5.76**
+- **Tổng API: ~$8.10**
+
+**Giờ công:**
+- PM / thiết kế eval + phân tích: **8 giờ**
+- Engineering (code checks, schema validator, regex): **5 giờ** (phức tạp hơn Case 1 vì có lookup mock logic)
+- CRM Ops review (2 người × 4h): **8 giờ** (nhiều hơn Case 1 vì multi-match case cần xem kỹ)
+- **Tổng giờ công: 21 giờ**
+
+**Timeline:** 2 tuần — tuần 1: build + calibration + code checks, tuần 2: full eval run + CRM ops review + kết luận.
+
+Giá API lấy từ https://www.anthropic.com/pricing. Tổng chi phí API chỉ ~$8 — chi phí thật sự nằm ở 21 giờ công. Plan này đủ để trả lời: signal detection có đáng tin không, ambiguity handling có đúng không, và có case nào Copilot tự ý act vượt quyền không — đủ cơ sở để quyết định có nên đề xuất pilot live với 1 team sales nhỏ hay cần sửa thêm.
+
+---
+
+**Phân tích Mock Outcome trong đề (bổ sung):**
+
+Mock outcome hiển thị "Đơn liên quan: DH-48291 – Đã giao thành công" và "Gợi ý cho sales: Báo khách đơn đã giao và mời mua thêm sản phẩm mới."
+
+Vấn đề:
+1. Trạng thái "đã giao" có thể là stale data trong OMS — code eval cần check timestamp của order status.
+2. Upsell gợi ý khi khách chưa nhận hàng (hoặc thông tin không rõ) — LLM judge bắt: suggested_next_step không phù hợp với order_status.
+3. Không rõ số điện thoại match bao nhiêu hồ sơ — code eval phải kiểm tra `ambiguity_flag` và `match_status`.
+4. Không có `warning_messages` — nếu CRM và OMS có sự khác biệt về trạng thái, cảnh báo phải được raise.
+
+→ Case này fail LLM criterion (suggested_next_step), và có thể fail code check (missing warning khi data conflict) trước khi cần human review.
 
 ---
